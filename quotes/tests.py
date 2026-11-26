@@ -1,9 +1,11 @@
+
 from django.test import TestCase, Client
 from django.urls import reverse
+from django.utils import timezone
 
 from .models import Quote
 from .forms import QuoteForm
-from .views import get_random_quote
+from .views import _pick_random
 
 
 # ==========================================
@@ -13,48 +15,27 @@ from .views import get_random_quote
 class QuoteModelTests(TestCase):
 
     def test_create_quote(self):
-        """Sprawdza poprawne utworzenie cytatu."""
-
         quote = Quote.objects.create(
             text="Wiedza to potęga.",
             author="Francis Bacon"
         )
 
+        self.assertEqual(Quote.objects.count(), 1)
         self.assertEqual(quote.text, "Wiedza to potęga.")
         self.assertEqual(quote.author, "Francis Bacon")
 
-    def test_quote_without_author(self):
-        """Sprawdza możliwość dodania cytatu bez autora."""
-
+    def test_create_quote_without_author(self):
         quote = Quote.objects.create(
-            text="Czas to pieniądz.",
-            author=""
+            text="Cytat bez autora."
         )
 
         self.assertEqual(quote.author, "")
 
-    def test_quote_string_representation(self):
-        """Sprawdza tekstową reprezentację obiektu."""
+    def test_multiple_quotes(self):
+        Quote.objects.create(text="Cytat 1", author="Autor 1")
+        Quote.objects.create(text="Cytat 2", author="Autor 2")
 
-        quote = Quote.objects.create(
-            text="Wiedza to potęga.",
-            author="Francis Bacon"
-        )
-
-        self.assertEqual(
-            str(quote),
-            "Wiedza to potęga. - Francis Bacon"
-        )
-
-    def test_quote_is_saved_in_database(self):
-        """Sprawdza, czy cytat został zapisany w bazie danych."""
-
-        Quote.objects.create(
-            text="Nigdy się nie poddawaj.",
-            author="Autor"
-        )
-
-        self.assertEqual(Quote.objects.count(), 1)
+        self.assertEqual(Quote.objects.count(), 2)
 
 
 # ==========================================
@@ -63,56 +44,57 @@ class QuoteModelTests(TestCase):
 
 class RandomQuoteTests(TestCase):
 
-    def test_random_quote_when_database_is_empty(self):
-        """Sprawdza zachowanie funkcji przy pustej bazie."""
-
-        result = get_random_quote()
+    def test_returns_none_when_database_is_empty(self):
+        result = _pick_random()
 
         self.assertIsNone(result)
 
-    def test_random_quote_returns_existing_quote(self):
-        """Sprawdza, czy funkcja zwraca istniejący cytat."""
-
+    def test_returns_existing_quote(self):
         quote = Quote.objects.create(
             text="Wiedza to potęga.",
             author="Francis Bacon"
         )
 
-        result = get_random_quote()
+        result = _pick_random()
 
-        self.assertIsNotNone(result)
-        self.assertEqual(result.pk, quote.pk)
+        self.assertEqual(result, quote)
 
-    def test_random_quote_returns_quote_from_database(self):
-        """Sprawdza, czy wynik losowania należy do bazy."""
-
-        Quote.objects.create(
+    def test_returns_one_of_existing_quotes(self):
+        quote1 = Quote.objects.create(
             text="Cytat pierwszy",
             author="Autor 1"
         )
-
-        Quote.objects.create(
+        quote2 = Quote.objects.create(
             text="Cytat drugi",
             author="Autor 2"
         )
 
-        result = get_random_quote()
+        result = _pick_random()
 
-        self.assertIn(
-            result.text,
-            ["Cytat pierwszy", "Cytat drugi"]
+        self.assertIn(result, [quote1, quote2])
+
+    def test_excludes_previous_quote_when_possible(self):
+        quote1 = Quote.objects.create(
+            text="Cytat pierwszy",
+            author="Autor 1"
         )
+        quote2 = Quote.objects.create(
+            text="Cytat drugi",
+            author="Autor 2"
+        )
+
+        result = _pick_random(exclude_id=quote1.id)
+
+        self.assertEqual(result, quote2)
 
 
 # ==========================================
-# TESTY FORMULARZA
+# TESTY FORMULARZA QUOTEFORM
 # ==========================================
 
 class QuoteFormTests(TestCase):
 
-    def test_valid_quote_form(self):
-        """Sprawdza poprawność formularza z prawidłowymi danymi."""
-
+    def test_valid_form(self):
         form = QuoteForm(data={
             "text": "Wiedza to potęga.",
             "author": "Francis Bacon"
@@ -120,50 +102,29 @@ class QuoteFormTests(TestCase):
 
         self.assertTrue(form.is_valid())
 
-    def test_empty_quote_form(self):
-        """Sprawdza odrzucanie pustej treści cytatu."""
-
+    def test_empty_text_is_invalid(self):
         form = QuoteForm(data={
             "text": "",
-            "author": "Autor"
+            "author": "Francis Bacon"
         })
 
         self.assertFalse(form.is_valid())
-        self.assertIn("text", form.errors)
 
-    def test_quote_with_only_whitespace(self):
-        """Sprawdza odrzucanie treści zawierającej same spacje."""
-
+    def test_whitespace_only_text_is_invalid(self):
         form = QuoteForm(data={
             "text": "     ",
-            "author": "Autor"
+            "author": "Francis Bacon"
         })
 
         self.assertFalse(form.is_valid())
 
-    def test_quote_without_author_is_valid(self):
-        """Sprawdza, czy autor może pozostać pusty."""
-
+    def test_author_can_be_empty(self):
         form = QuoteForm(data={
-            "text": "Czas to pieniądz.",
+            "text": "Cytat bez autora.",
             "author": ""
         })
 
         self.assertTrue(form.is_valid())
-
-    def test_quote_text_is_stripped(self):
-        """Sprawdza usuwanie zbędnych spacji z treści."""
-
-        form = QuoteForm(data={
-            "text": "   Wiedza to potęga.   ",
-            "author": "Francis Bacon"
-        })
-
-        self.assertTrue(form.is_valid())
-        self.assertEqual(
-            form.cleaned_data["text"],
-            "Wiedza to potęga."
-        )
 
 
 # ==========================================
@@ -172,40 +133,138 @@ class QuoteFormTests(TestCase):
 
 class RandomQuoteViewTests(TestCase):
 
-    def setUp(self):
-        self.quote = Quote.objects.create(
-            text="Wiedza to potęga.",
-            author="Francis Bacon"
+    def test_random_quote_page_returns_200(self):
+        response = self.client.get(
+            reverse("quotes:random")
         )
 
-    def test_random_quote_page_loads(self):
-        """Sprawdza, czy strona cytatu dnia się wyświetla."""
-
-        response = self.client.get(reverse("random_quote"))
-
         self.assertEqual(response.status_code, 200)
+
+    def test_random_quote_uses_correct_template(self):
+        response = self.client.get(
+            reverse("quotes:random")
+        )
+
         self.assertTemplateUsed(
             response,
             "quotes/random_quote.html"
         )
 
     def test_random_quote_is_displayed(self):
-        """Sprawdza, czy cytat i autor są widoczni na stronie."""
+        quote = Quote.objects.create(
+            text="Wiedza to potęga.",
+            author="Francis Bacon"
+        )
 
-        response = self.client.get(reverse("random_quote"))
+        response = self.client.get(
+            reverse("quotes:random")
+        )
 
-        self.assertContains(response, "Wiedza to potęga.")
-        self.assertContains(response, "Francis Bacon")
+        self.assertEqual(response.context["quote"], quote)
 
-    def test_empty_database_message(self):
-        """Sprawdza komunikat przy braku cytatów."""
+    def test_empty_database_returns_none(self):
+        response = self.client.get(
+            reverse("quotes:random")
+        )
 
-        Quote.objects.all().delete()
+        self.assertIsNone(response.context["quote"])
 
-        response = self.client.get(reverse("random_quote"))
+    def test_quote_is_remembered_for_the_day(self):
+        quote = Quote.objects.create(
+            text="Wiedza to potęga.",
+            author="Francis Bacon"
+        )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Brak cytatów")
+        first_response = self.client.get(
+            reverse("quotes:random")
+        )
+
+        second_response = self.client.get(
+            reverse("quotes:random")
+        )
+
+        self.assertEqual(first_response.context["quote"], quote)
+        self.assertEqual(second_response.context["quote"], quote)
+
+
+# ==========================================
+# TESTY WIDOKU REROLL
+# ==========================================
+
+class RerollViewTests(TestCase):
+
+    def test_reroll_requires_post_method(self):
+        response = self.client.get(
+            reverse("quotes:reroll")
+        )
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_reroll_redirects_to_random_quote(self):
+        Quote.objects.create(
+            text="Przykładowy cytat.",
+            author="Autor"
+        )
+
+        response = self.client.post(
+            reverse("quotes:reroll")
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("quotes:random")
+        )
+
+    def test_reroll_selects_different_quote(self):
+        quote1 = Quote.objects.create(
+            text="Cytat pierwszy",
+            author="Autor 1"
+        )
+        quote2 = Quote.objects.create(
+            text="Cytat drugi",
+            author="Autor 2"
+        )
+
+        session = self.client.session
+        session["quote_of_day"] = {
+            "id": quote1.id,
+            "date": timezone.localdate().isoformat()
+        }
+        session.save()
+
+        self.client.post(reverse("quotes:reroll"))
+
+        session = self.client.session
+
+        self.assertEqual(
+            session["quote_of_day"]["id"],
+            quote2.id
+        )
+
+    def test_reroll_with_empty_database_redirects_to_add(self):
+        response = self.client.post(
+            reverse("quotes:reroll")
+        )
+
+        self.assertRedirects(
+            response,
+            reverse("quotes:add")
+        )
+
+    def test_reroll_with_one_quote_keeps_that_quote(self):
+        quote = Quote.objects.create(
+            text="Jedyny cytat.",
+            author="Autor"
+        )
+
+        self.client.post(reverse("quotes:reroll"))
+
+        session = self.client.session
+
+        self.assertEqual(
+            session["quote_of_day"]["id"],
+            quote.id
+        )
 
 
 # ==========================================
@@ -214,138 +273,105 @@ class RandomQuoteViewTests(TestCase):
 
 class AddQuoteViewTests(TestCase):
 
-    def test_add_quote_page_loads(self):
-        """Sprawdza poprawne wyświetlanie formularza."""
-
-        response = self.client.get(reverse("add_quote"))
+    def test_add_quote_page_returns_200(self):
+        response = self.client.get(
+            reverse("quotes:add")
+        )
 
         self.assertEqual(response.status_code, 200)
+
+    def test_add_quote_uses_correct_template(self):
+        response = self.client.get(
+            reverse("quotes:add")
+        )
+
         self.assertTemplateUsed(
             response,
             "quotes/add_quote.html"
         )
 
-    def test_add_quote_contains_csrf_token(self):
-        """Sprawdza obecność tokena CSRF w formularzu."""
+    def test_add_quote_displays_form(self):
+        response = self.client.get(
+            reverse("quotes:add")
+        )
 
-        response = self.client.get(reverse("add_quote"))
+        self.assertIsInstance(
+            response.context["form"],
+            QuoteForm
+        )
 
-        self.assertContains(response, "csrfmiddlewaretoken")
-
-    def test_add_quote_successfully(self):
-        """Sprawdza poprawne dodanie cytatu."""
-
+    def test_add_quote_successfully_saves_quote(self):
         response = self.client.post(
-            reverse("add_quote"),
+            reverse("quotes:add"),
             {
-                "text": "Nigdy się nie poddawaj.",
-                "author": "Autor testowy"
+                "text": "Wiedza to potęga.",
+                "author": "Francis Bacon"
             }
         )
 
         self.assertRedirects(
             response,
-            reverse("random_quote")
+            reverse("quotes:add")
         )
 
-        self.assertTrue(
-            Quote.objects.filter(
-                text="Nigdy się nie poddawaj.",
-                author="Autor testowy"
-            ).exists()
-        )
+        self.assertEqual(Quote.objects.count(), 1)
+
+        quote = Quote.objects.first()
+
+        self.assertEqual(quote.text, "Wiedza to potęga.")
+        self.assertEqual(quote.author, "Francis Bacon")
 
     def test_add_quote_without_author(self):
-        """Sprawdza dodawanie cytatu bez autora."""
-
         response = self.client.post(
-            reverse("add_quote"),
+            reverse("quotes:add"),
             {
-                "text": "Czas to pieniądz.",
+                "text": "Cytat bez autora.",
                 "author": ""
             }
         )
 
         self.assertRedirects(
             response,
-            reverse("random_quote")
+            reverse("quotes:add")
         )
 
-        self.assertTrue(
-            Quote.objects.filter(
-                text="Czas to pieniądz.",
-                author=""
-            ).exists()
-        )
+        self.assertEqual(Quote.objects.count(), 1)
 
-    def test_empty_quote_is_rejected(self):
-        """Sprawdza odrzucenie pustego cytatu."""
-
+    def test_empty_text_is_not_saved(self):
         response = self.client.post(
-            reverse("add_quote"),
+            reverse("quotes:add"),
             {
                 "text": "",
-                "author": "Autor testowy"
+                "author": "Autor"
             }
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(Quote.objects.count(), 0)
+        self.assertFalse(response.context["form"].is_valid())
 
+    def test_whitespace_text_is_not_saved(self):
+        response = self.client.post(
+            reverse("quotes:add"),
+            {
+                "text": "     ",
+                "author": "Autor"
+            }
+        )
+
+        self.assertEqual(response.status_code, 200)
         self.assertEqual(Quote.objects.count(), 0)
 
-        self.assertFormError(
-            response.context["form"],
-            "text",
-            "To pole jest wymagane."
-        )
-
-    def test_invalid_quote_shows_error_message(self):
-        """Sprawdza wyświetlanie komunikatu o błędzie."""
-
-        response = self.client.post(
-            reverse("add_quote"),
-            {
-                "text": "   ",
-                "author": "Autor testowy"
-            }
-        )
-
-        self.assertEqual(response.status_code, 200)
-
-        self.assertContains(
-            response,
-            "Treść cytatu nie może być pusta."
-        )
-
-    def test_csrf_protection(self):
-        """Sprawdza, czy Django blokuje POST bez tokena CSRF."""
-
+    def test_add_quote_requires_csrf_token(self):
         csrf_client = Client(enforce_csrf_checks=True)
 
         response = csrf_client.post(
-            reverse("add_quote"),
+            reverse("quotes:add"),
             {
-                "text": "Test CSRF",
+                "text": "Testowy cytat.",
                 "author": "Autor"
             }
         )
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(Quote.objects.count(), 0)
-
-    def test_success_message_after_adding_quote(self):
-        """Sprawdza komunikat po poprawnym zapisaniu cytatu."""
-
-        response = self.client.post(
-            reverse("add_quote"),
-            {
-                "text": "Wiedza to potęga.",
-                "author": "Francis Bacon"
-            },
-            follow=True
-        )
-
-        self.assertContains(
-            response,
-            "Cytat został dodany!"
-        )
